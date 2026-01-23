@@ -1,0 +1,27 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/include/**",
+                "/usr/include/openssl",
+                "/usr/include/uuid"
+            ],
+            "defines": [
+                "_GNU_SOURCE",
+                "_POSIX_C_SOURCE=200809L"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerArgs": [
+                "-Wall",
+                "-Wextra",
+                "-Wpedantic"
+            ]
+        }
+    ],
+    "version": 4
+}

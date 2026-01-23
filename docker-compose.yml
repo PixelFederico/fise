@@ -1,0 +1,11 @@
+services:
+  fise:
+    image: 'ghcr.io/PixelFederico/fise:latest'
+    hostname: 'fise'
+    volumes:
+      - "./data/files:/var/lib/fise/api"
+      - "./data:/etc/fise"
+    networks:
+      - fise-network
+networks:
+   fise-network:

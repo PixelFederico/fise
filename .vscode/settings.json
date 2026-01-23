@@ -1,0 +1,15 @@
+{
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.codeAnalysis.clangTidy.enabled": true,
+    "C_Cpp.codeAnalysis.clangTidy.runAutomatically": true,
+    "C_Cpp.codeAnalysis.clangTidy.checks.disabled": [
+        "clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling"
+    ],
+    "C_Cpp.default.compilerArgs": [
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic"
+    ],
+    "C_Cpp.loggingLevel": "Information"
+}
