@@ -1,0 +1,21 @@
+name: Run Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev uuid-dev
+    - name: Build with GCC
+      run: |
+        gcc -Wall -W -O2 main.c -luuid -lcrypto -o fise-test-linux-x64
