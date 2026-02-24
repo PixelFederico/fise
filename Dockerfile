@@ -1,14 +1,17 @@
 FROM alpine:3.22.2 AS builder
 
-RUN apk add --no-cache gcc musl-dev linux-headers openssl-dev openssl-libs-static util-linux-dev util-linux-static
+RUN apk add --no-cache build-base linux-headers openssl-dev util-linux-dev
 
-COPY main.c /src/main.c
+COPY . /src
+WORKDIR /src
 
-RUN gcc -Wall -W -O2 -static /src/main.c -luuid -lcrypto -o /bin/fise
+RUN make release
 
 FROM alpine:3.22.2
 
-COPY --from=builder /bin/fise /bin/fise
+RUN apk add --no-cache libuuid
+
+COPY --from=builder /src/build/fise /bin/fise
 
 CMD ["/bin/fise"]
 

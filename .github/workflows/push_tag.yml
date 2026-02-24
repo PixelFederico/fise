@@ -12,17 +12,21 @@ jobs:
       packages: write
     steps:
     - uses: actions/checkout@v4
+
     - name: Extract version from tag
       id: version
       run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-      
+
     - name: Install dependencies
       run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev uuid-dev
-    - name: Build with GCC
+          sudo apt-get install -y build-essential libssl-dev uuid-dev make
+
+    - name: Build with Make
       run: |
-        gcc -Wall -W -O2 main.c -luuid -lcrypto -o fise-${{ steps.version.outputs.VERSION }}-linux-x64
+        make release
+        cp build/fise fise-${{ steps.version.outputs.VERSION }}-linux-x64
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:

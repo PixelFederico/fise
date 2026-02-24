@@ -1,5 +1,2 @@
-fise
-api
-.zed
-test.c
+./build
 valgrind.log
