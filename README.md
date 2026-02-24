@@ -177,29 +177,30 @@ Use the provided [docker-compose.yml](docker-compose.yml) file:
 ### Prerequisites
 
 - GCC compiler
+- Make
 - OpenSSL development libraries (`libssl-dev` / `openssl-dev`)
 - UUID library (`uuid-dev` / `util-linux-dev`)
 
 **Debian/Ubuntu:**
 ```bash
-apt install gcc libssl-dev uuid-dev
+apt install gcc make libssl-dev uuid-dev
 ```
 
 **Alpine:**
 ```bash
-apk add gcc musl-dev openssl-dev util-linux-dev
+apk add build-base linux-headers openssl-dev util-linux-dev libuuid
 ```
 
 ### Build
 
 ```bash
-gcc -Wall -W -O2 main.c -luuid -lcrypto -o fise
+make debug
 ```
 
 ### Run
 
 ```bash
-./fise
+./build/fise
 ```
 
 The server will start on port 80. Make sure the required directories exist:

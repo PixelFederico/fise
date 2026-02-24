@@ -15,7 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev uuid-dev
-    - name: Build with GCC
+          sudo apt-get install -y build-essential libssl-dev uuid-dev make
+    - name: Build with Make
       run: |
-        gcc -Wall -W -O2 main.c -luuid -lcrypto -o fise-test-linux-x64
+        make release
