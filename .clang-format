@@ -4,13 +4,13 @@ TabWidth: 3
 UseTab: ForIndentation
 BreakBeforeBraces: Custom
 BraceWrapping:
-   AfterEnum: false
-   AfterStruct: false
-   SplitEmptyFunction: false
+  AfterEnum: false
+  AfterStruct: false
+  SplitEmptyFunction: false
 PointerAlignment: Right
 AllowShortIfStatementsOnASingleLine: true
 AlignConsecutiveDeclarations: true
 AlignConsecutiveAssignments:
-   Enabled: true
-   AcrossEmptyLines: true
-   AcrossComments: false
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: false
