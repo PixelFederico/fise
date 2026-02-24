@@ -193,7 +193,8 @@ int is_jwt_valid(char *headers, const int headers_len, const int request_mode,
 	if (exp_str != NULL) {
 		exp_str = strchr(exp_str, ':');
 		if (exp_str != NULL) {
-			exp_time = atoll(exp_str + 1);
+			char *endptr;
+			exp_time = (time_t)strtol(exp_str + 1, &endptr, 10);
 		}
 	}
 
@@ -207,7 +208,8 @@ int is_jwt_valid(char *headers, const int headers_len, const int request_mode,
 
 	time_t current_time = time(NULL);
 	if (current_time >= exp_time) {
-		printf("JWT expired (exp: %ld, now: %ld)\n", exp_time, current_time);
+		printf("JWT expired (exp: %ld, now: %ld)\n", (long)exp_time,
+		       (long)current_time);
 		return 0;
 	}
 
