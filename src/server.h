@@ -12,7 +12,8 @@ enum CLIENT_STATUS {
 	STATUS_DOWNLOADING,
 	STATUS_UPLOADING,
 	STATUS_DISCONNECTED,
-	STATUS_WAITING_UPLOAD_ID
+	STATUS_WAITING_UPLOAD_ID,
+	STATUS_FLUSHING /* Draining write_buf before transitioning to next_status */
 };
 
 /*
@@ -30,6 +31,10 @@ struct s_job {
 	               // send the remaining in a later write), or when the read
 	               // length is greater than MAX_BUFFER (so other read calls are
 	               // needed)
+	char         *write_buf;      /* Pending outgoing data for STATUS_FLUSHING */
+	size_t        write_buf_len;  /* Total bytes in write_buf */
+	size_t        write_buf_sent; /* Bytes already sent from write_buf */
+	int           next_status;    /* Status to transition to after flush */
 	unsigned long body_chunk_len;
 	long          last_status_change;
 	char         *body_chunk; // A piece of the client body to be processed
