@@ -70,6 +70,84 @@ header_node *create_headers(const char *labels, ...) {
 }
 
 /*
+ * Builds the full HTTP response into a single allocated buffer (*out).
+ * The caller is responsible for freeing *out.
+ * If 'headers' is non-null they are appended and freed before returning.
+ * If 'message' is non-null it is JSON-wrapped and sent as the body.
+ * returns: total byte length of *out on success, -1 on error
+ */
+ssize_t http_build_response(char **out, const char *code,
+                            header_node *headers, const char *message) {
+	char *response_body = NULL;
+	if (message) {
+		const char *fmt  = (*code == '2') ? "{\"success\":\"%s\"}"
+		                                  : "{\"error\":\"%s\"}";
+		int         blen = snprintf(NULL, 0, fmt, message);
+		if (blen < 0) {
+			if (headers) free_headers(headers);
+			return -1;
+		}
+		response_body = smalloc(blen + 1);
+		if (sprintf(response_body, fmt, message) < 0) {
+			sfree(response_body);
+			if (headers) free_headers(headers);
+			return -1;
+		}
+	}
+
+	header_node *cors_headers = create_headers(
+	    "Access-Control-Allow-Methods,Access-Control-Allow-"
+	    "Origin,Access-Control-Allow-Headers,Content-Type",
+	    ALLOW_METHODS, ALLOW_ORIGIN, ALLOW_HEADERS, "application/json");
+	if (headers) {
+		header_node *tail = headers;
+		while (tail->next != NULL) tail = tail->next;
+		tail->next = cors_headers;
+	} else {
+		headers = cors_headers;
+	}
+
+	/* First pass: calculate total size */
+	int total = snprintf(NULL, 0, "HTTP/1.1 %s\r\n", code);
+	if (total < 0) goto err;
+	for (header_node *h = headers; h != NULL; h = h->next) {
+		int n = snprintf(NULL, 0, "%s:%s\r\n", h->key, h->value);
+		if (n < 0) goto err;
+		total += n;
+	}
+	if (message) {
+		int n = snprintf(NULL, 0, "Content-Length:%zu\r\n\r\n%s",
+		                 strlen(response_body), response_body);
+		if (n < 0) goto err;
+		total += n;
+	} else {
+		total += 2; /* "\r\n" */
+	}
+
+	/* Second pass: write into buffer */
+	*out      = smalloc(total + 1);
+	char *pos = *out;
+	pos += sprintf(pos, "HTTP/1.1 %s\r\n", code);
+	for (header_node *h = headers; h != NULL; h = h->next)
+		pos += sprintf(pos, "%s:%s\r\n", h->key, h->value);
+	if (message) {
+		pos += sprintf(pos, "Content-Length:%zu\r\n\r\n%s",
+		               strlen(response_body), response_body);
+		sfree(response_body);
+	} else {
+		memcpy(pos, "\r\n", 2);
+	}
+
+	free_headers(headers);
+	return total;
+
+err:
+	if (response_body) sfree(response_body);
+	free_headers(headers);
+	return -1;
+}
+
+/*
  * Sends http response to clientfd with the 'code' response code, with the
  * passed headers and message as the body. If 'headers' is null it only sends
  * the necessary headers, if 'message' is null it will not send the body
@@ -77,114 +155,11 @@ header_node *create_headers(const char *labels, ...) {
  */
 int http_send_response(const int clientfd, const char *code,
                        header_node *headers, const char *message) {
-	char *response_body = NULL;
-	if (message) {
-		if (*code == '2') {
-			// Success response
-			int body_len = snprintf(NULL, 0, "{\"success\":\"%s\"}", message);
-			if (body_len < 0) {
-				if (headers) free_headers(headers);
-				return -1;
-			}
-			response_body = smalloc(body_len + 1);
-			if (sprintf(response_body, "{\"success\":\"%s\"}", message) < 0) {
-				sfree(response_body);
-				if (headers) free_headers(headers);
-				return -1;
-			}
-		} else {
-			// Error response
-			int body_len = snprintf(NULL, 0, "{\"error\":\"%s\"}", message);
-			if (body_len < 0) {
-				if (headers) free_headers(headers);
-				return -1;
-			}
-			response_body = smalloc(body_len + 1);
-			if (sprintf(response_body, "{\"error\":\"%s\"}", message) < 0) {
-				sfree(response_body);
-				if (headers) free_headers(headers);
-				return -1;
-			}
-		}
-	}
-	header_node *cors_headers = create_headers(
-	    "Access-Control-Allow-Methods,Access-Control-Allow-"
-	    "Origin,Access-Control-Allow-Headers,Content-Type",
-	    ALLOW_METHODS, ALLOW_ORIGIN, ALLOW_HEADERS, "application/json");
-	if (headers) {
-		header_node *headers_tail = headers;
-		while (headers_tail->next != NULL) {
-			headers_tail = headers_tail->next;
-		}
-		headers_tail->next = cors_headers;
-	} else {
-		headers = cors_headers;
-	}
-	int len = snprintf(NULL, 0, "HTTP/1.1 %s\r\n", code);
-	if (len < 0) {
-		if (message) sfree(response_body);
-		free_headers(headers);
-		return -1;
-	}
-	char *response = smalloc(len + 1);
-	if (sprintf(response, "HTTP/1.1 %s\r\n", code) < 0) {
-		sfree(response);
-		if (message) sfree(response_body);
-		free_headers(headers);
-		return -1;
-	}
-	socket_send(clientfd, response, len);
-	sfree(response);
-	{
-		// Convert each entry of the headers linked list and send on the socket
-		header_node *current_header = headers;
-		do {
-			int header_len = snprintf(NULL, 0, "%s:%s\r\n", current_header->key,
-			                          current_header->value);
-			if (header_len < 0) {
-				if (message) sfree(response_body);
-				free_headers(headers);
-				return -1;
-			}
-
-			char *header = smalloc(header_len + 1);
-			if (sprintf(header, "%s:%s\r\n", current_header->key,
-			            current_header->value) < 0) {
-				sfree(header);
-				if (message) sfree(response_body);
-				free_headers(headers);
-				return -1;
-			}
-			socket_send(clientfd, header, header_len);
-			sfree(header);
-			current_header = current_header->next;
-		} while (current_header);
-	}
-	if (message) {
-		int header_len = snprintf(NULL, 0, "Content-Length:%lu\r\n\r\n",
-		                          strlen(response_body));
-		if (header_len < 0) {
-			sfree(response_body);
-			free_headers(headers);
-			return -1;
-		}
-
-		char *header = smalloc(header_len + 1);
-		if (sprintf(header, "Content-Length:%lu\r\n\r\n", strlen(response_body)) <
-		    0) {
-			sfree(header);
-			sfree(response_body);
-			free_headers(headers);
-			return -1;
-		}
-		socket_send(clientfd, header, header_len);
-		sfree(header);
-		socket_send(clientfd, response_body, strlen(response_body));
-		sfree(response_body);
-	} else {
-		socket_send(clientfd, "\r\n", 2);
-	}
-	free_headers(headers);
+	char  *buf = NULL;
+	ssize_t len = http_build_response(&buf, code, headers, message);
+	if (len < 0) return -1;
+	socket_send(clientfd, buf, len);
+	sfree(buf);
 	return 0;
 }
 

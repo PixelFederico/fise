@@ -101,18 +101,15 @@ int socket_start_listener(const int sockfd, int *epfd) {
 	return 0;
 }
 
-/* Sends message of message_len length to clientfd peer
+/* Sends message of message_len length to clientfd peer.
+ * Partial sends (EAGAIN/EWOULDBLOCK) are handled by the caller via
+ * queue_response() in server.c, which buffers the remainder and retries on
+ * the next EPOLLOUT event under STATUS_FLUSHING.
  * returns: The length of the message that server has successfully sent. The
- * length can be less than message_len if the client blocked the socket
- * listening while sending
+ * length can be less than message_len if the socket is not ready for writing.
  */
 size_t socket_send(const int clientfd, const char *message,
                    const size_t message_len) {
-	// PLANNED: there is a rare edge case where the client can't read the full
-	// message and the server should save the remaining data and retry when
-	// client is ready, but for now is not handled to prevent denial of service
-	// by having a lot of clients not ready. It's only handled by
-	// process_download_chunk
 	size_t total_sent = 0;
 	while (total_sent < message_len) {
 		const char *remaining_sbuf = message + total_sent;

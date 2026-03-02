@@ -33,7 +33,7 @@
 	            // value have to be less than MAX_BUFFER
 #define MAX_BUFFER                                                             \
 	4 * 1024 * 1024 // 4 MB. The maximum the server/client can read or
-	                // write withone call (not always applied by the server in
+	                // write with one call (not always applied by the server in
 	                // write when the response is not too large)
 #define MAX_EVENTS 100
 
@@ -179,6 +179,12 @@ void disconnect_client(const int data_epfd, job *current_job) {
 		}
 		current_job->filefd = 0;
 	}
+	if (current_job->write_buf != NULL) {
+		sfree(current_job->write_buf);
+		current_job->write_buf      = NULL;
+		current_job->write_buf_len  = 0;
+		current_job->write_buf_sent = 0;
+	}
 	if (current_job->headers_len > 0) {
 		sfree(current_job->headers);
 		current_job->headers     = NULL;
@@ -264,6 +270,41 @@ int process_download_chunk(job *current_job) {
 }
 
 /*
+ * Tries to send buf of buf_len bytes to current_job->clientfd immediately.
+ * If the socket blocks (EAGAIN/EWOULDBLOCK), stores the unsent remainder in
+ * current_job->write_buf and switches epoll to EPOLLOUT so the event loop
+ * will drain it via STATUS_FLUSHING. After the flush completes the job
+ * transitions to next_status.
+ * returns: 0 if fully sent, 1 if buffered for async drain, -1 on error
+ */
+static int queue_response(const int epfd, job *current_job, const char *buf,
+                          const size_t buf_len, const int next_status) {
+	size_t sent = socket_send(current_job->clientfd, buf, buf_len);
+	if (sent == buf_len) return 0;
+	if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+
+	size_t remaining = buf_len - sent;
+	if (remaining > MAX_BUFFER) {
+		/* Hard cap: never buffer more than MAX_BUFFER per client */
+		return -1;
+	}
+	current_job->write_buf = smalloc(remaining);
+	memcpy(current_job->write_buf, buf + sent, remaining);
+	current_job->write_buf_len  = remaining;
+	current_job->write_buf_sent = 0;
+	current_job->next_status    = next_status;
+
+	struct epoll_event ev;
+	ev.events  = EPOLLOUT;
+	ev.data.fd = current_job->clientfd;
+	if (epoll_ctl(epfd, EPOLL_CTL_MOD, current_job->clientfd, &ev) == -1)
+		return -1;
+
+	change_client_status(current_job, STATUS_FLUSHING);
+	return 1;
+}
+
+/*
  * Finds the requested http path from passed request of request_len size
  * returns: the found path, null if not found or an error occurred
  */
@@ -341,6 +382,10 @@ int start_http_server(fise *data) {
 						job *clientJob            = (job *)smalloc(sizeof(job));
 						clientJob->headers_len    = 0;
 						clientJob->body_chunk_len = 0;
+						clientJob->write_buf      = NULL;
+						clientJob->write_buf_len  = 0;
+						clientJob->write_buf_sent = 0;
+						clientJob->next_status    = STATUS_DISCONNECTED;
 						change_client_status(clientJob, STATUS_IDLE);
 						clientJob->clientfd = acceptfd;
 						clientJob->filefd   = -1;
@@ -623,20 +668,42 @@ int start_http_server(fise *data) {
 								    "Disposition",
 								    "application/octet-stream; charset=UTF-8",
 								    content_header, range_header, disp_header);
-								if (http_send_response(current_job->clientfd, "206",
-								                       headers, NULL) == -1) {
-									sfree(disp_header);
-									sfree(range_header);
-									sfree(content_header);
+								char   *resp_buf = NULL;
+								ssize_t resp_len = http_build_response(&resp_buf, "206",
+								                                       headers, NULL);
+								sfree(disp_header);
+								sfree(range_header);
+								sfree(content_header);
+								if (resp_len < 0) {
 									http_send_response(
 									    current_job->clientfd, "500", NULL,
 									    "Please contact an administrator");
 									disconnect_client(data->epfd, current_job);
 									continue;
 								}
-								sfree(disp_header);
-								sfree(range_header);
-								sfree(content_header);
+								int qr =
+								    queue_response(data->epfd, current_job, resp_buf,
+								                   resp_len, STATUS_DOWNLOADING);
+								sfree(resp_buf);
+								if (qr == -1) {
+									disconnect_client(data->epfd, current_job);
+									continue;
+								}
+								if (qr == 0) {
+									/* Fully sent: switch to EPOLLOUT for file data */
+									change_client_status(current_job,
+									                     STATUS_DOWNLOADING);
+									struct epoll_event me;
+									me.events  = EPOLLOUT;
+									me.data.fd = current_job->clientfd;
+									if (epoll_ctl(data->epfd, EPOLL_CTL_MOD,
+									              current_job->clientfd, &me) == -1) {
+										perror("Error modifying epoll for download");
+										disconnect_client(data->epfd, current_job);
+										continue;
+									}
+								}
+								/* qr == 1: STATUS_FLUSHING set by queue_response */
 							} else {
 								// Range not requested, send from beginning
 								current_job->beginning = 0;
@@ -651,6 +718,7 @@ int start_http_server(fise *data) {
 									    current_job->clientfd, "500", NULL,
 									    "Please contact an administrator");
 									disconnect_client(data->epfd, current_job);
+									continue;
 								}
 								header_node *headers = create_headers(
 								    "Content-Type,Content-Length,"
@@ -658,32 +726,41 @@ int start_http_server(fise *data) {
 								    "Disposition",
 								    "application/octet-stream; charset=UTF-8",
 								    content_header, disp_header);
-								if (http_send_response(current_job->clientfd, "200",
-								                       headers, NULL) == -1) {
-									sfree(disp_header);
-									sfree(content_header);
+								char   *resp_buf = NULL;
+								ssize_t resp_len = http_build_response(&resp_buf, "200",
+								                                       headers, NULL);
+								sfree(disp_header);
+								sfree(content_header);
+								if (resp_len < 0) {
 									http_send_response(
 									    current_job->clientfd, "500", NULL,
 									    "Please contact an administrator");
 									disconnect_client(data->epfd, current_job);
 									continue;
 								}
-								sfree(disp_header);
-								sfree(content_header);
-							}
-
-							change_client_status(current_job, STATUS_DOWNLOADING);
-							struct epoll_event mod_event;
-							mod_event.events  = EPOLLOUT;
-							mod_event.data.fd = current_job->clientfd;
-
-							if (epoll_ctl(data->epfd, EPOLL_CTL_MOD,
-							              current_job->clientfd, &mod_event) == -1) {
-								perror("Error modifying epoll events for download");
-								http_send_response(current_job->clientfd, "500", NULL,
-								                   "Please contact an administrator");
-								disconnect_client(data->epfd, current_job);
-								continue;
+								int qr =
+								    queue_response(data->epfd, current_job, resp_buf,
+								                   resp_len, STATUS_DOWNLOADING);
+								sfree(resp_buf);
+								if (qr == -1) {
+									disconnect_client(data->epfd, current_job);
+									continue;
+								}
+								if (qr == 0) {
+									/* Fully sent: switch to EPOLLOUT for file data */
+									change_client_status(current_job,
+									                     STATUS_DOWNLOADING);
+									struct epoll_event me;
+									me.events  = EPOLLOUT;
+									me.data.fd = current_job->clientfd;
+									if (epoll_ctl(data->epfd, EPOLL_CTL_MOD,
+									              current_job->clientfd, &me) == -1) {
+										perror("Error modifying epoll for download");
+										disconnect_client(data->epfd, current_job);
+										continue;
+									}
+								}
+								/* qr == 1: STATUS_FLUSHING set by queue_response */
 							}
 						} else {
 							// Path segment is not "api", invalid request
@@ -980,9 +1057,44 @@ int start_http_server(fise *data) {
 					continue;
 				}
 				if (current_job->status == STATUS_WAITING_UPLOAD_ID) {
-					http_send_response(current_job->clientfd, "201", NULL,
-					                   current_job->id);
-					disconnect_client(data->epfd, current_job);
+					char   *resp_buf = NULL;
+					ssize_t resp_len =
+					    http_build_response(&resp_buf, "201", NULL, current_job->id);
+					if (resp_len < 0) {
+						disconnect_client(data->epfd, current_job);
+						continue;
+					}
+					int qr = queue_response(data->epfd, current_job, resp_buf,
+					                        resp_len, STATUS_DISCONNECTED);
+					sfree(resp_buf);
+					if (qr != 1) {
+						/* Fully sent (0) or error (-1): disconnect now */
+						disconnect_client(data->epfd, current_job);
+					}
+					continue;
+				}
+				if (current_job->status == STATUS_FLUSHING) {
+					size_t remaining =
+					    current_job->write_buf_len - current_job->write_buf_sent;
+					size_t sent = socket_send(current_job->clientfd,
+					                          current_job->write_buf +
+					                              current_job->write_buf_sent,
+					                          remaining);
+					current_job->write_buf_sent += sent;
+					if (current_job->write_buf_sent >= current_job->write_buf_len) {
+						sfree(current_job->write_buf);
+						current_job->write_buf      = NULL;
+						current_job->write_buf_len  = 0;
+						current_job->write_buf_sent = 0;
+						int ns                      = current_job->next_status;
+						if (ns == STATUS_DISCONNECTED) {
+							disconnect_client(data->epfd, current_job);
+						} else {
+							/* e.g. STATUS_DOWNLOADING: keep EPOLLOUT,
+							 * change state so the next iteration handles it */
+							change_client_status(current_job, ns);
+						}
+					}
 					continue;
 				}
 			}
@@ -998,7 +1110,8 @@ void *start_timeout_check(void *data_v) {
 		sleep(1);
 		for (int i = 0; i < data->n_jobs; i++) {
 			if (data->jobs[i].status == STATUS_IDLE ||
-			    data->jobs[i].status == STATUS_SENDING_HEADERS) {
+			    data->jobs[i].status == STATUS_SENDING_HEADERS ||
+			    data->jobs[i].status == STATUS_FLUSHING) {
 				struct timespec spec;
 				if (clock_gettime(CLOCK_REALTIME, &spec) == -1) {
 					perror("clock_gettime");

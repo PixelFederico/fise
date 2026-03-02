@@ -5,6 +5,7 @@
 #define FISE_HTTP
 
 #include "string.h"
+#include <sys/types.h>
 
 struct s_header_node {
 	char *key;
@@ -18,6 +19,10 @@ struct s_header_node {
 typedef struct s_header_node header_node;
 
 header_node *create_headers(const char *labels, ...);
+/* Builds the full HTTP response into an allocated buffer. The caller must
+ * free it. Returns the buffer length, or -1 on error. */
+ssize_t      http_build_response(char **out, const char *code,
+                                 header_node *headers, const char *message);
 int          http_send_response(const int clientfd, const char *code,
                                 header_node *headers, const char *message);
 char        *find_http_header_value(char *request, const size_t request_len,
