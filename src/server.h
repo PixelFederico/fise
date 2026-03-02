@@ -31,6 +31,7 @@ struct s_job {
 	               // length is greater than MAX_BUFFER (so other read calls are
 	               // needed)
 	unsigned long body_chunk_len;
+	long          last_status_change;
 	char         *body_chunk; // A piece of the client body to be processed
 	                          // by server
 	unsigned int headers_len;

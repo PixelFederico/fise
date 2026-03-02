@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include <unistd.h>
 #include <uuid/uuid.h>
 
+#define TIMEOUT_TIME 3
 #define FILES_PATH "/var/lib/fise/api/"
 #define CONFIG_PATH "/etc/fise/"
 #define PUBKEY_PATH CONFIG_PATH "pubkey"
@@ -143,6 +145,17 @@ job *find_client_job(fise *data, int clientfd) {
 	return NULL;
 }
 
+// TODO: DESC
+void change_client_status(job *job, int status) {
+	struct timespec spec;
+	if (clock_gettime(CLOCK_REALTIME, &spec) == -1) {
+		perror("clock_gettime");
+		exit(EXIT_FAILURE);
+	}
+	job->last_status_change = spec.tv_sec;
+	job->status             = status;
+}
+
 /*
  * Deletes a client of the given current_job from data_epfd and closes the
  * connection. Sets the status of the job to STATUS_DISCONNECTED, does a full
@@ -182,7 +195,7 @@ void disconnect_client(const int data_epfd, job *current_job) {
 		sfree(current_job->id);
 		current_job->id = NULL;
 	}
-	current_job->status = STATUS_DISCONNECTED;
+	change_client_status(current_job, STATUS_DISCONNECTED);
 }
 
 /* Takes a chunk (of MAX_BUFFER size or less if it would exceed the file length)
@@ -328,10 +341,10 @@ int start_http_server(fise *data) {
 						job *clientJob            = (job *)smalloc(sizeof(job));
 						clientJob->headers_len    = 0;
 						clientJob->body_chunk_len = 0;
-						clientJob->status         = STATUS_IDLE;
-						clientJob->clientfd       = acceptfd;
-						clientJob->filefd         = -1;
-						clientJob->id             = NULL;
+						change_client_status(clientJob, STATUS_IDLE);
+						clientJob->clientfd = acceptfd;
+						clientJob->filefd   = -1;
+						clientJob->id       = NULL;
 
 						add_job(data, clientJob);
 
@@ -341,7 +354,7 @@ int start_http_server(fise *data) {
 							if (close(acceptfd) == -1) {
 								perror("Error while closing connection");
 							}
-							clientJob->status = STATUS_DISCONNECTED;
+							change_client_status(clientJob, STATUS_DISCONNECTED);
 						}
 						sfree(clientJob);
 						sfree(acceptfd_event);
@@ -370,7 +383,7 @@ int start_http_server(fise *data) {
 					continue;
 				}
 				if (current_job->status == STATUS_IDLE) {
-					current_job->status = STATUS_SENDING_HEADERS;
+					change_client_status(current_job, STATUS_SENDING_HEADERS);
 				}
 				if (current_job->status == STATUS_SENDING_HEADERS) {
 					if (current_job->headers_len == 0) {
@@ -404,7 +417,7 @@ int start_http_server(fise *data) {
 							       body_chunk_len);
 						}
 						sfree(read_buf);
-						current_job->status = STATUS_IDLE;
+						change_client_status(current_job, STATUS_IDLE);
 					} else {
 						// The user have more headers to send
 						sfree(read_buf);
@@ -658,7 +671,8 @@ int start_http_server(fise *data) {
 								sfree(disp_header);
 								sfree(content_header);
 							}
-							current_job->status = STATUS_DOWNLOADING;
+
+							change_client_status(current_job, STATUS_DOWNLOADING);
 							struct epoll_event mod_event;
 							mod_event.events  = EPOLLOUT;
 							mod_event.data.fd = current_job->clientfd;
@@ -878,8 +892,9 @@ int start_http_server(fise *data) {
 							continue;
 						}
 						sfree(path);
-						current_job->id     = id;
-						current_job->status = STATUS_WAITING_UPLOAD_ID;
+						current_job->id = id;
+
+						change_client_status(current_job, STATUS_WAITING_UPLOAD_ID);
 						struct epoll_event mod_event;
 						mod_event.events  = EPOLLOUT;
 						mod_event.data.fd = current_job->clientfd;
@@ -931,7 +946,8 @@ int start_http_server(fise *data) {
 							disconnect_client(data->epfd, current_job);
 							continue;
 						}
-						current_job->status = STATUS_WAITING_UPLOAD_ID;
+
+						change_client_status(current_job, STATUS_WAITING_UPLOAD_ID);
 					} else if (current_job->uploaded_bytes >
 					           current_job->upload_size) {
 						// The user sent more data than expected
@@ -976,6 +992,26 @@ int start_http_server(fise *data) {
 	return 0;
 }
 
+void *start_timeout_check(void *data_v) {
+	fise *data = (fise *)data_v;
+	while (1) {
+		sleep(1);
+		for (int i = 0; i < data->n_jobs; i++) {
+			if (data->jobs[i].status == STATUS_IDLE ||
+			    data->jobs[i].status == STATUS_SENDING_HEADERS) {
+				struct timespec spec;
+				if (clock_gettime(CLOCK_REALTIME, &spec) == -1) {
+					perror("clock_gettime");
+					exit(EXIT_FAILURE);
+				}
+				if (spec.tv_sec - data->jobs[i].last_status_change >=
+				    TIMEOUT_TIME) {
+					disconnect_client(data->epfd, &data->jobs[i]);
+				}
+			}
+		}
+	}
+}
 int main(void) {
 	if (create_dir(FILES_PATH) == -1) {
 		return 1;
@@ -991,6 +1027,8 @@ int main(void) {
 		close_server(data);
 		return 1;
 	}
+	pthread_t timeout_thr;
+	pthread_create(&timeout_thr, NULL, *start_timeout_check, data);
 	int res = start_http_server(data);
 	close_server(data);
 	if (res == -1) {
