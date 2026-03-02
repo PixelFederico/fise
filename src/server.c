@@ -145,7 +145,10 @@ job *find_client_job(fise *data, int clientfd) {
 	return NULL;
 }
 
-// TODO: DESC
+/*
+ * Updates the client job status and records the current timestamp.
+ * The timestamp is used by the timeout thread to detect stale connections
+ */
 void change_client_status(job *job, int status) {
 	struct timespec spec;
 	if (clock_gettime(CLOCK_REALTIME, &spec) == -1) {
