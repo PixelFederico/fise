@@ -992,12 +992,18 @@ int start_http_server(fise *data) {
 					}
 				}
 				if (current_job->status == STATUS_UPLOADING) {
+					size_t remaining =
+					    current_job->upload_size - current_job->uploaded_bytes;
+					size_t to_write =
+					    current_job->body_chunk_len < remaining
+					        ? current_job->body_chunk_len
+					        : remaining;
 					size_t  total_written = 0;
 					ssize_t written       = -1;
-					while (total_written < current_job->body_chunk_len) {
+					while (total_written < to_write) {
 						written = write(current_job->filefd,
 						                current_job->body_chunk + total_written,
-						                current_job->body_chunk_len - total_written);
+						                to_write - total_written);
 						if (written == -1) {
 							perror("Error while writing received file data chunk");
 							disconnect_client(data->epfd, current_job);
@@ -1025,25 +1031,6 @@ int start_http_server(fise *data) {
 						}
 
 						change_client_status(current_job, STATUS_WAITING_UPLOAD_ID);
-					} else if (current_job->uploaded_bytes >
-					           current_job->upload_size) {
-						// The user sent more data than expected
-						char uuid_path[strlen(FILES_PATH) + strlen(current_job->id) +
-						               1];
-						if (sprintf(uuid_path, "%s%s", FILES_PATH, current_job->id) <
-						    0) {
-							perror("sprintf");
-							http_send_response(current_job->clientfd, "500", NULL,
-							                   "Please contact an administrator");
-							disconnect_client(data->epfd, current_job);
-							continue;
-						}
-						remove_dir(uuid_path);
-						http_send_response(current_job->clientfd, "400", NULL,
-						                   "More data than expected received");
-						printf("User sent more data than expected\n");
-						disconnect_client(data->epfd, current_job);
-						continue;
 					}
 				}
 			}
