@@ -209,9 +209,8 @@ The server will start on port 80. Make sure the required directories exist:
 
 ## TODO
 
-- [ ] Make each response asynchronous
-- [ ] Add API timeout system
-- [ ] Use more files in the source instead of only one big file
+- [x] Add API timeout system
+- [x] Use more files in the source instead of only one big file
 - [ ] Make a configuration file
 - [ ] Add more crypto signature algorithms support for JWT
 - [ ] Suggest your features!
