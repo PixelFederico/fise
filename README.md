@@ -21,7 +21,7 @@ The only configuration needed is the [JWT](https://datatracker.ietf.org/doc/html
 |------|-------------|
 | `/etc/fise/pubkey` | Ed25519 public key (base64url encoded) for JWT verification |
 
-**Note:** If the pubkey file is empty or missing, JWT authentication is automatically disabled and all upload/delete operations will be unauthorized.
+**Note:** If the pubkey file is empty or missing, JWT authentication is automatically disabled and all upload/delete operations will be automatically ACCEPTED.
 
 To enable authentication, place your Ed25519 public key in `/etc/fise/pubkey`. If using [FISE Web](https://github.com/PixelFederico/fise-web), you can obtain the public key from the `/api/auth/jwks` endpoint (the `x` value).
 
